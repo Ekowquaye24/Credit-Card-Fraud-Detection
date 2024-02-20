@@ -16,7 +16,7 @@ This project leverages machine learning to tackle the pervasive problem of credi
 
 ##	Results
 
-The Random Forest model demonstrated superior performance, achieving an accuracy of 99.98\%, with sensitivity and specificity values highlighting its effectiveness in fraud detection.
+The Random Forest model demonstrated superior performance, achieving an AUC of 100\% and accuracy of 99.98\%, with sensitivity and specificity values highlighting its effectiveness in fraud detection.
 
 ##	Future Work
 *	Model Improvement: Explore additional techniques to further enhance model accuracy.
