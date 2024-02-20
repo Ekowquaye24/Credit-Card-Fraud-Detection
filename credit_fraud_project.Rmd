@@ -1,0 +1,205 @@
+---
+title: "Credit Card Fraud Detection"
+author: "George E Quaye"
+#date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Installing and importing all the required packages
+```{r}
+# Install packages if they are not already installed
+packages <- c("randomForest", "e1071", "gbm", "rpart", "pROC","dplyr","caret","ROSE","rpart" )
+new_packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new_packages)) install.packages(new_packages)
+
+# Load the packages
+library(randomForest)
+library(e1071)
+library(gbm)
+library(rpart)
+library(pROC)
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(caTools)
+library(ROSE)
+library(tidyverse)
+```
+
+
+# Bringing in the dataset
+```{r}
+credit_card <- read.csv("creditcard.csv"); dim(credit_card)
+```
+
+# EDA 
+## Looking at the structure of the dataset
+```{r}
+str(credit_card)
+```
+
+## Inspecting missing values
+```{r}
+# Convert data to a format where NA is identifiable
+df_long <- credit_card %>%
+  mutate(row = row_number()) %>%
+  pivot_longer(cols = -row, names_to = "variable", values_to = "value") %>%
+  mutate(is_missing = is.na(value))
+
+# Plot missing values
+ggplot(df_long, aes(x = row, y = variable, fill = is_missing)) +
+  geom_tile() +
+  scale_fill_manual(values = c("TRUE" = "red", "FALSE" = "grey"), name = "Missing Data") +
+  labs(x = "Row Number", y = "Variable", title = "Missing Data Visualization") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+## Distribution of Fraud and Legit Transactions
+```{r}
+# Convert the table to a dataframe for plotting
+data_dist <- as.data.frame(table(credit_card$Class))
+colnames(data_dist) <- c("TransactionType", "Count")
+
+# Convert counts to percentage
+data_dist$Percentage <- prop.table(data_dist$Count) * 100
+
+# Replace numeric transaction types with descriptive labels
+data_dist$TransactionType <- ifelse(data_dist$TransactionType == 0, "Legit", "Fraud")
+
+# Plot
+ggplot(data_dist, aes(x = "", y = Percentage, fill = TransactionType)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  scale_fill_manual(values = c("Legit" = "skyblue", "Fraud" = "red")) +
+  theme_void() +
+  labs(fill = "Transaction Type", title = "Distribution of Fraud and Legit Transactions") +
+  geom_text(aes(label = paste0(round(Percentage, 2), "%")), position = position_stack(vjust = 0.5))
+```
+
+## Treating imbalance classification 
+```{r}
+# ROS and RUS
+n_new <- nrow(credit_card)
+fraction_fraud_new <-0.50
+
+sampling_result <-ovun.sample(Class ~ .,
+                              data = credit_card,
+                              method = "both",
+                              N = n_new,
+                              p = fraction_fraud_new,
+                              seed =123)
+
+sampled_credit <- sampling_result$data
+
+sampled_credit$Class <- factor(sampled_credit$Class, levels =  c(0,1))
+
+table(sampled_credit$Class)
+
+prop.table(table(sampled_credit$Class))
+
+ggplot(data = sampled_credit , aes(x = V1, y = V2, col = Class))+
+  geom_point(position = position_jitter(width = 0.2))+
+  theme_bw()+
+  scale_color_manual(values = c('tomato','navyblue'))
+```
+
+
+# Modeling (Considering RF, Logistic, SVM, Decision Tree)
+```{r}
+#Creating training and test sets for fraud detection model
+set.seed(123)
+data_sample = sample.split(sampled_credit$Class,SplitRatio= 0.70)
+train_data = subset(sampled_credit,data_sample == TRUE)
+test_data = subset(sampled_credit, data_sample == FALSE)
+dim(train_data)
+dim(test_data)
+```
+
+
+```{r}
+# Assuming your target variable is 'Class'
+# Logistic Regression
+model_lr <- glm(Class ~ ., data = train_data, family = "binomial")
+predictions_lr <- predict(model_lr, newdata = test_data, type = "response")
+
+# Random Forest
+model_rf <- randomForest(Class ~ ., data = train_data)
+predictions_rf <- predict(model_rf, newdata = test_data, type = "prob")[,2]
+
+# Support Vector Machine
+model_svm <- svm(Class ~ ., data = train_data, probability = TRUE)
+predictions_svm <- attr(predict(model_svm, newdata = test_data, probability = TRUE), "probabilities")[,2]
+
+
+# Decision Tree
+model_dt <- rpart(Class ~ ., data = train_data)
+predictions_dt <- predict(model_dt, newdata = test_data, type = "prob")[,2]
+```
+
+
+```{r}
+# Compute ROC curves
+roc_lr <- roc(test_data$Class, predictions_lr)
+roc_rf <- roc(test_data$Class, predictions_rf)
+roc_svm <- roc(test_data$Class, predictions_svm)
+roc_dt <- roc(test_data$Class, predictions_dt)
+
+# Convert ROC objects to data frames
+df_roc_lr <- data.frame(t = roc_lr$thresholds, sensitivity = roc_lr$sensitivities, specificity = roc_lr$specificities, model = "LR")
+df_roc_rf <- data.frame(t = roc_rf$thresholds, sensitivity = roc_rf$sensitivities, specificity = roc_rf$specificities, model = "RF")
+df_roc_svm <- data.frame(t = roc_svm$thresholds, sensitivity = roc_svm$sensitivities, specificity = roc_svm$specificities, model = "SVM")
+df_roc_dt <- data.frame(t = roc_dt$thresholds, sensitivity = roc_dt$sensitivities, specificity = roc_dt$specificities, model = "DT")
+
+# Combine all ROC data frames
+roc_data <- rbind(df_roc_lr, df_roc_rf, df_roc_svm, df_roc_dt)
+
+# Calculate AUC values
+auc_lr <- auc(roc_lr)
+auc_rf <- auc(roc_rf)
+auc_svm <- auc(roc_svm)
+auc_dt <- auc(roc_dt)
+
+# Create a data frame for AUC annotations
+auc_values <- data.frame(model = c("LR", "RF", "SVM", "DT"),
+                         AUC = c(auc_lr, auc_rf, auc_svm, auc_dt),
+                         x = c(0.55, 0.55, 0.55, 0.55), # X position for annotation
+                         y = c(0.1, 0.2, 0.3, 0.4)) # Y position for annotation
+
+
+```
+
+
+```{r}
+# Plot ROC curves with AUC values annotated
+ggplot() +
+  geom_line(data = roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_abline(linetype = "dashed") +
+  scale_color_manual(values = c("LR" = "red", "RF" = "blue", "SVM" = "green", "DT" = "orange")) +
+  labs(x = "1 - Specificity (False Positive Rate)", y = "Sensitivity (True Positive Rate)", title = "ROC Curves Comparison") +
+  geom_text(data = auc_values, aes(x = x, y = y, label = paste(model, ": AUC =", round(AUC, 3))), hjust = 0, vjust = 0, size = 4, color = "black") +
+  theme_minimal() +
+  theme(legend.title = element_blank())
+
+```
+
+# The final model (RF)
+```{r}
+predicted_val<- predict(model_rf, newdata = test_data, type = "class")
+confusionMatrix(predicted_val, test_data$Class)
+```
+
+# Plot the Variable Importance for the final model
+```{r}
+varImpPlot(model_rf)
+```
+
+
+
+
+
